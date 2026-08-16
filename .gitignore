@@ -1,0 +1,6 @@
+dist/
+build/
+*.db
+*.spec
+__pycache__/
+.env
