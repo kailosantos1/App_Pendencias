@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from unittest.mock import patch
 from fastapi.testclient import TestClient
-import sistema as s
+import app_pendencias as s
 
 class SistemaTest(unittest.TestCase):
     def setUp(self):
