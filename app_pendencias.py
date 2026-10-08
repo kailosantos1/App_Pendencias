@@ -5,6 +5,7 @@ import datetime
 import asyncio
 import threading
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from contextlib import suppress
 import requests
 from contextlib import asynccontextmanager
@@ -38,6 +39,93 @@ PORT = int(os.getenv("PORT", 5000))
 # Sem isso, qualquer mensagem sua nesse chat (mesmo conversa solta) seria
 # processada como se fosse um comando de pendências.
 PREFIXO_COMANDO = "!"
+
+# Agenda semanal de contratos, com confirmações persistidas no SQLite.
+AGENDA_CONTRATOS = {
+    "cnivel": {"nome": "CNivel", "dias": (1, 3), "hora": (13, 30)},
+    "cbhidro": {"nome": "CBHidro", "dias": (2,), "hora": (13, 30)},
+    "enebras": {"nome": "Enebras", "dias": (3,), "hora": (9, 0)},
+    "acrel": {"nome": "Acrel", "dias": (2,), "hora": (13, 30)},
+}
+CONTRATOS_LOCK = threading.RLock()
+FUSO_CONTRATOS = ZoneInfo("America/Sao_Paulo")
+
+
+def agora_contratos():
+    return datetime.datetime.now(FUSO_CONTRATOS)
+
+
+def gerar_ocorrencias_contratos(conn, agora):
+    data = agora.date().isoformat()
+    for cliente, config in AGENDA_CONTRATOS.items():
+        if agora.weekday() in config["dias"] and (agora.hour, agora.minute) >= config["hora"]:
+            conn.execute(
+                "INSERT OR IGNORE INTO avisos_contratos (cliente, data_contrato) VALUES (?, ?)",
+                (cliente, data),
+            )
+    conn.commit()
+
+
+def verificar_avisos_contratos(agora=None):
+    agora = agora or agora_contratos()
+    jid = os.getenv("JID_CONTRATOS", "").strip()
+    db_path = GRUPOS.get(jid)
+    if db_path is None:
+        return
+    with CONTRATOS_LOCK, sqlite3.connect(db_path, timeout=30) as conn:
+        gerar_ocorrencias_contratos(conn, agora)
+        linhas = conn.execute(
+            "SELECT cliente, MIN(data_contrato), MAX(ultimo_envio) FROM avisos_contratos "
+            "WHERE confirmado = 0 GROUP BY cliente ORDER BY cliente"
+        ).fetchall()
+        for cliente, data_contrato, ultimo_envio in linhas:
+            if ultimo_envio and agora.timestamp() - ultimo_envio < 600:
+                continue
+            nome = AGENDA_CONTRATOS[cliente]["nome"]
+            if data_contrato == agora.date().isoformat():
+                inicio = f"Hoje é dia de contrato na {nome}"
+            else:
+                data_formatada = datetime.date.fromisoformat(data_contrato).strftime("%d/%m/%Y")
+                inicio = f"O contrato na {nome} do dia {data_formatada} ainda está pendente"
+            mensagem = (
+                f"{inicio}, por favor me diga quando alguém for para não ficar pendente o contrato.\n\n"
+                f"✅ Para confirmar, envie !ok {cliente}."
+            )
+            if enviar_whatsapp(jid, mensagem):
+                conn.execute(
+                    "UPDATE avisos_contratos SET ultimo_envio = ? WHERE cliente = ? AND confirmado = 0",
+                    (agora.timestamp(), cliente),
+                )
+                conn.commit()
+
+
+def confirmar_contrato(jid, cliente="", agora=None):
+    if jid != os.getenv("JID_CONTRATOS", "").strip():
+        return "Os avisos de contrato são confirmados somente no grupo Contratos."
+    agora = agora or agora_contratos()
+    with CONTRATOS_LOCK, sqlite3.connect(GRUPOS[jid], timeout=30) as conn:
+        gerar_ocorrencias_contratos(conn, agora)
+        pendentes = [r[0] for r in conn.execute(
+            "SELECT DISTINCT cliente FROM avisos_contratos WHERE confirmado = 0 ORDER BY cliente"
+        )]
+        cliente = cliente.strip().lower()
+        if not cliente:
+            if not pendentes:
+                return "✅ Não há avisos de contrato pendentes."
+            if len(pendentes) > 1:
+                opcoes = "\n".join(f"• !ok {c}" for c in pendentes)
+                return "Há mais de um cliente pendente. Confirme pelo nome:\n" + opcoes
+            cliente = pendentes[0]
+        if cliente not in AGENDA_CONTRATOS:
+            return "Cliente desconhecido. Use !ok cnivel, !ok cbhidro, !ok enebras ou !ok acrel."
+        if cliente not in pendentes:
+            return f"Não há aviso ativo de contrato para {AGENDA_CONTRATOS[cliente]['nome']}."
+        conn.execute(
+            "UPDATE avisos_contratos SET confirmado = 1, confirmado_em = ? WHERE cliente = ? AND confirmado = 0",
+            (agora.isoformat(), cliente),
+        )
+        return f"✅ Contrato de {AGENDA_CONTRATOS[cliente]['nome']} confirmado! Os avisos foram encerrados."
+
 
 # -------------------------------------------------------------
 # LIFESPAN (GERENCIADOR DE INICIALIZAÇÃO DO FASTAPI)
@@ -97,6 +185,16 @@ def inicializar_banco(db_path):
             tarefa TEXT NOT NULL,
             data_alerta TEXT,
             lembrete_enviado INTEGER DEFAULT 0
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS avisos_contratos (
+            cliente TEXT NOT NULL,
+            data_contrato TEXT NOT NULL,
+            confirmado INTEGER NOT NULL DEFAULT 0,
+            ultimo_envio REAL,
+            confirmado_em TEXT,
+            PRIMARY KEY (cliente, data_contrato)
         )
     """)
     conn.commit()
@@ -327,10 +425,17 @@ def processar_comando_whatsapp(mensagem_texto, jid_remetente):
     texto = mensagem_texto.strip()
     texto_minusculo = texto.lower().replace('?', '').strip()
 
+    if texto_minusculo == 'ok' or texto_minusculo.startswith('ok '):
+        cliente = texto_minusculo[2:].strip()
+        enviar_whatsapp(jid_remetente, confirmar_contrato(jid_remetente, cliente))
+        return
+
     if texto_minusculo in ['ajuda', 'comandos']:
         resposta = (
             "📖 *COMANDOS DISPONÍVEIS*\n\n"
             "• !ajuda ou !comandos — mostra esta ajuda.\n"
+            "• !ok <cliente> — confirma contrato e encerra os avisos desse cliente.\n"
+            "  Exemplo: !ok cnivel; !ok sozinho confirma se houver só um cliente pendente.\n"
             "• !lista — lista todas as pendências deste grupo.\n"
             "• !lista <cliente> — lista as pendências de um cliente.\n"
             "  Exemplo: !lista studio home\n"
@@ -467,6 +572,7 @@ async def loop_verificacao_horario():
     while True:
         try:
             await asyncio.to_thread(verificar_e_disparar_lembretes)
+            await asyncio.to_thread(verificar_avisos_contratos)
         except Exception as e:
             print(f"❌ [ERRO VERIFICAÇÃO LEMBRETES]: {e}")
         await asyncio.sleep(30)

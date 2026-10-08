@@ -22,6 +22,9 @@ class SistemaTest(unittest.TestCase):
         self.addCleanup(patch.stopall)
         self.client = TestClient(s.app)
         self.jids = list(self.grupos)
+        self.config_env = patch.dict(os.environ, {"JID_CONTRATOS": self.jids[1]})
+        self.config_env.start()
+        self.addCleanup(self.config_env.stop)
 
     def webhook(self, jid, texto, from_me=False, msg_id='manual'):
         return self.client.post('/webhook', json={'event':'messages.upsert','data':{'key':{'remoteJid':jid,'fromMe':from_me,'id':msg_id},'message':{'conversation':texto}}}).json()
@@ -67,6 +70,68 @@ class SistemaTest(unittest.TestCase):
                 respostas.append(resposta)
             self.assertEqual(s.listar_absolutamente_tudo_db(self.grupos[jid]), [])
         self.assertEqual(len(set(respostas)), 1)
+
+    def horario(self, dia, hora, minuto):
+        return s.datetime.datetime(2026, 10, dia, hora, minuto, tzinfo=s.FUSO_CONTRATOS)
+
+    def test_terca_repeticao_confirmacao_e_proximo_ciclo(self):
+        s.verificar_avisos_contratos(self.horario(6, 13, 29))
+        self.envio.assert_not_called()
+        s.verificar_avisos_contratos(self.horario(6, 13, 30))
+        self.assertEqual(self.envio.call_count, 1)
+        self.assertEqual(self.envio.call_args.args[0], self.jids[1])
+        s.verificar_avisos_contratos(self.horario(6, 13, 39))
+        self.assertEqual(self.envio.call_count, 1)
+        s.verificar_avisos_contratos(self.horario(6, 13, 40))
+        self.assertEqual(self.envio.call_count, 2)
+        self.assertIn('confirmado', s.confirmar_contrato(self.jids[1], agora=self.horario(6,13,41)))
+        s.verificar_avisos_contratos(self.horario(6, 14, 0))
+        self.assertEqual(self.envio.call_count, 2)
+        s.verificar_avisos_contratos(self.horario(8, 13, 30))
+        self.assertEqual(self.envio.call_count, 4)  # CNivel e Enebras na quinta.
+
+    def test_quarta_confirmacao_separada(self):
+        agora=self.horario(7,13,30)
+        s.verificar_avisos_contratos(agora)
+        self.assertEqual(self.envio.call_count,2)
+        resposta=s.confirmar_contrato(self.jids[1], agora=agora)
+        self.assertIn('!ok acrel',resposta)
+        self.assertIn('!ok cbhidro',resposta)
+        self.assertIn('confirmado',s.confirmar_contrato(self.jids[1],'acrel',agora))
+        self.envio.reset_mock()
+        s.verificar_avisos_contratos(self.horario(7,13,40))
+        self.assertEqual(self.envio.call_count,1)
+        self.assertIn('CBHidro',self.envio.call_args.args[1])
+
+    def test_enebras_manha_falha_reinicio_e_atraso(self):
+        s.verificar_avisos_contratos(self.horario(8,8,59))
+        self.envio.assert_not_called()
+        self.envio.return_value=False
+        s.verificar_avisos_contratos(self.horario(8,9,0))
+        self.assertIn('Enebras',self.envio.call_args.args[1])
+        with sqlite3.connect(self.grupos[self.jids[1]]) as conn:
+            self.assertIsNone(conn.execute('SELECT ultimo_envio FROM avisos_contratos').fetchone()[0])
+        self.envio.return_value=True
+        s.verificar_avisos_contratos(self.horario(8,9,1))
+        self.assertEqual(self.envio.call_count,2)
+        s.inicializar_banco(self.grupos[self.jids[1]])
+        s.verificar_avisos_contratos(self.horario(8,9,2))
+        self.assertEqual(self.envio.call_count,2)
+        s.verificar_avisos_contratos(self.horario(9,9,1))
+        self.assertIn('08/10/2026',self.envio.call_args.args[1])
+        self.assertNotIn('Hoje é',self.envio.call_args.args[1])
+
+    def test_ok_pelo_webhook_e_isolamento(self):
+        agora=self.horario(6,13,30)
+        s.verificar_avisos_contratos(agora)
+        with patch.object(s,'agora_contratos',return_value=agora):
+            self.webhook(self.jids[0],'!ok cnivel')
+            self.assertIn('somente no grupo Contratos',self.envio.call_args.args[1])
+            self.webhook(self.jids[1],'!ok cnivel')
+            self.assertIn('confirmado',self.envio.call_args.args[1])
+        self.envio.reset_mock()
+        s.verificar_avisos_contratos(self.horario(6,14,0))
+        self.envio.assert_not_called()
 
     def test_bloqueia_envio_fora_dos_grupos(self):
         # Recupera a função original sem realizar chamadas externas.

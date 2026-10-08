@@ -37,3 +37,22 @@ O trecho DELETE enviado no chat não faz parte da inicialização e não foi exe
 `python -m unittest -v test_sistema.py`
 
 Os testes usam bancos temporários e envio simulado, sem conectar ao WhatsApp. Após instalar, teste !lista e uma tarefa de teste em cada grupo para confirmar o ambiente real.
+
+## Avisos semanais de contrato
+
+Somente no grupo definido em JID_CONTRATOS, no horário de Brasília (America/Sao_Paulo):
+
+| Cliente | Dias | Primeiro aviso |
+|---|---|---|
+| CNivel | Terça e quinta | 13:30 |
+| CBHidro | Quarta | 13:30 |
+| Acrel | Quarta | 13:30 |
+| Enebras | Quinta | 09:00 |
+
+A rotina verifica a cada 30 segundos e repete o aviso de cada cliente a cada 10 minutos após o último envio aceito. O texto pede que informem quando alguém for para não ficar pendente o contrato.
+
+Confirme com `!ok cnivel`, `!ok cbhidro`, `!ok acrel` ou `!ok enebras`. `!ok` sozinho confirma apenas se houver um cliente pendente; com vários, mostra as opções. A confirmação encerra todos os avisos pendentes daquele cliente, sem excluir suas tarefas. No próximo dia de contrato, surge um novo aviso.
+
+Avisos não confirmados continuam depois da meia-noite, informando a data pendente. Uma reinicialização mantém confirmações e horários de envio no contratos.db. Quando o sistema inicia após o horário previsto, cria o aviso do dia e retoma os pendentes já registrados. Dias inteiros em que o sistema ficou desligado não são criados retroativamente. Execute somente um processo e mantenha-o ligado nos horários programados.
+
+Após atualizar, execute novamente `python -m pip install -r requirements.txt` para instalar também tzdata (necessário para o fuso no Windows). Depois reinicie `python sistema.py`. Não mude a porta ou o webhook.
