@@ -327,6 +327,28 @@ def processar_comando_whatsapp(mensagem_texto, jid_remetente):
     texto = mensagem_texto.strip()
     texto_minusculo = texto.lower().replace('?', '').strip()
 
+    if texto_minusculo in ['ajuda', 'comandos']:
+        resposta = (
+            "📖 *COMANDOS DISPONÍVEIS*\n\n"
+            "• !ajuda ou !comandos — mostra esta ajuda.\n"
+            "• !lista — lista todas as pendências deste grupo.\n"
+            "• !lista <cliente> — lista as pendências de um cliente.\n"
+            "  Exemplo: !lista studio home\n"
+            "• !<cliente> — consulta rápida para nomes de uma palavra.\n"
+            "  Exemplo: !acme\n"
+            "• !<cliente>: <tarefa> — adiciona uma pendência.\n"
+            "  Exemplo: !studio home: revisar contrato\n"
+            "• !<cliente>: <tarefa> lembrete <data/hora> — adiciona com lembrete.\n"
+            "  Exemplo: !studio home: ligar lembrete amanhã às 14:30\n"
+            "• !del <cliente> <número> ou !check <cliente> <número> — remove o item da lista.\n"
+            "  Exemplo: !del studio home 1\n\n"
+            "Aliases da lista geral: !pendencias, !pendencia, !listar, !todos e !tudo.\n"
+            "Consulta por cliente: !pendencias <cliente>, !pendencia <cliente> ou !listar <cliente>.\n\n"
+            "Cada comando consulta ou altera somente os dados deste grupo."
+        )
+        enviar_whatsapp(jid_remetente, resposta)
+        return
+
     if texto_minusculo in ['pendencias', 'pendencia', 'lista', 'listar', 'todos', 'tudo']:
         resposta = formatar_geral_todos_clientes(db_path)
         enviar_whatsapp(jid_remetente, resposta)

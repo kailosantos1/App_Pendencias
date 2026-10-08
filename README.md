@@ -1,6 +1,6 @@
 # Pendências e Contratos SystemUp
 
-Um processo, porta 5000 e webhook /webhook. Cada JID usa seu próprio SQLite.
+Um processo, porta 5000 e webhook /webhook. Cada JID usa seu próprio SQLite. JID_PENDENCIAS e JID_CONTRATOS são obrigatórios no .env; não há JIDs padrão no sistema.py nem fallback para JID_WHATSAPP. Se faltar um JID ou forem iguais, o sistema não inicia. A função de envio também bloqueia destinos fora desses dois grupos.
 
 ## Instalar no Windows
 
@@ -12,6 +12,8 @@ Um processo, porta 5000 e webhook /webhook. Cada JID usa seu próprio SQLite.
 6. Mantenha na Evolution o webhook já funcional: http://localhost:5000/webhook. A instância permanece App_Pendencias. Não é necessário distribuidor ou uma segunda porta.
 
 ## Comandos em ambos os grupos
+
+- `!ajuda` ou `!comandos` — mostra os comandos disponíveis com exemplos.
 
 - `!studio home: revisar contrato`
 - `!studio home: ligar para cliente lembrete amanhã às 14:30`

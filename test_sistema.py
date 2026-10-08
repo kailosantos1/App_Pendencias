@@ -4,7 +4,9 @@ import sqlite3
 from pathlib import Path
 from unittest.mock import patch
 from fastapi.testclient import TestClient
-import app_pendencias as s
+import os
+with patch.dict(os.environ, {"JID_PENDENCIAS": "teste-pendencias@g.us", "JID_CONTRATOS": "teste-contratos@g.us"}):
+    import app_pendencias as s
 
 class SistemaTest(unittest.TestCase):
     def setUp(self):
@@ -52,6 +54,26 @@ class SistemaTest(unittest.TestCase):
             with sqlite3.connect(self.grupos[jid]) as conn:
                 self.assertEqual(conn.execute('SELECT lembrete_enviado FROM pendencias').fetchone()[0],esperado)
         self.assertEqual([c.args[0] for c in self.envio.call_args_list],self.jids)
+
+    def test_ajuda_e_comandos_nos_dois_grupos(self):
+        respostas = []
+        for jid in self.jids:
+            for comando in ['!ajuda', '!comandos']:
+                self.assertEqual(self.webhook(jid, comando)['status'], 'processando')
+                destino, resposta = self.envio.call_args.args
+                self.assertEqual(destino, jid)
+                self.assertIn('!del studio home 1', resposta)
+                self.assertIn('!lista', resposta)
+                respostas.append(resposta)
+            self.assertEqual(s.listar_absolutamente_tudo_db(self.grupos[jid]), [])
+        self.assertEqual(len(set(respostas)), 1)
+
+    def test_bloqueia_envio_fora_dos_grupos(self):
+        # Recupera a função original sem realizar chamadas externas.
+        patch.stopall()
+        with patch.object(s.requests, 'post') as post:
+            self.assertFalse(s.enviar_whatsapp('pessoa@s.whatsapp.net', 'teste'))
+            post.assert_not_called()
 
     def test_preserva_banco_existente_e_horario(self):
         db=self.grupos[self.jids[0]]
