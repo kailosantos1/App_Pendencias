@@ -4,6 +4,8 @@ import sqlite3
 import datetime
 import asyncio
 import threading
+from pathlib import Path
+from contextlib import suppress
 import requests
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, BackgroundTasks
@@ -11,30 +13,47 @@ import uvicorn
 from dotenv import load_dotenv
 
 # Carrega variáveis do arquivo .env
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
 
 # --- CARREGAMENTO DAS CONFIGURAÇÕES VIA .ENV ---
 EVOLUTION_URL = os.getenv("EVOLUTION_URL", "http://localhost:8080")
 EVOLUTION_INSTANCE = os.getenv("EVOLUTION_INSTANCE", "App_Pendencias")
 EVOLUTION_API_KEY = os.getenv("EVOLUTION_API_KEY", "")
-JID_WHATSAPP = os.getenv("JID_WHATSAPP", "")
-DB_PATH = os.getenv("DB_PATH", "pendencias.db")
+def caminho_banco(nome):
+    return str((BASE_DIR / nome).resolve())
+
+GRUPOS = {
+    os.getenv("JID_PENDENCIAS", os.getenv("JID_WHATSAPP", "120363428433320020@g.us")).strip(): caminho_banco(os.getenv("DB_PENDENCIAS", os.getenv("DB_PATH", "pendencias.db"))),
+    os.getenv("JID_CONTRATOS", "120363413254902958@g.us").strip(): caminho_banco(os.getenv("DB_CONTRATOS", "contratos.db")),
+}
+if len(GRUPOS) != 2 or any(not jid.endswith("@g.us") for jid in GRUPOS):
+    raise ValueError("Configure dois JIDs de grupos distintos.")
+if len(set(os.path.normcase(p) for p in GRUPOS.values())) != 2:
+    raise ValueError("Cada grupo precisa de um banco distinto.")
+
 PORT = int(os.getenv("PORT", 5000))
 
 # Prefixo obrigatório para reconhecer uma mensagem como comando do bot.
 # Sem isso, qualquer mensagem sua nesse chat (mesmo conversa solta) seria
 # processada como se fosse um comando de pendências.
-PREFIXO_COMANDO = "/"
+PREFIXO_COMANDO = "!"
 
 # -------------------------------------------------------------
 # LIFESPAN (GERENCIADOR DE INICIALIZAÇÃO DO FASTAPI)
 # -------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    inicializar_banco()
-    asyncio.create_task(loop_verificacao_horario())
+    for db_path in GRUPOS.values():
+        inicializar_banco(db_path)
+    rotina = asyncio.create_task(loop_verificacao_horario())
     print("\n🤖 [SISTEMA ATIVO] Servidor pronto com varredura minuto a minuto.\n")
-    yield
+    try:
+        yield
+    finally:
+        rotina.cancel()
+        with suppress(asyncio.CancelledError):
+            await rotina
 
 app = FastAPI(lifespan=lifespan)
 
@@ -68,8 +87,8 @@ def foi_enviado_pelo_bot(msg_id):
 # -------------------------------------------------------------
 # FUNÇÕES DO BANCO DE DADOS (SQLITE)
 # -------------------------------------------------------------
-def inicializar_banco():
-    conn = sqlite3.connect(DB_PATH)
+def inicializar_banco(db_path):
+    conn = sqlite3.connect(db_path, timeout=30)
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS pendencias (
@@ -166,8 +185,8 @@ def calcular_data_hora_lembrete(termo_lembrete):
 
     return datetime.datetime.combine(data_alvo, datetime.time(hora_alvo, minuto_alvo))
 
-def adicionar_pendencia_db(cliente, tarefa, termo_lembrete=None):
-    conn = sqlite3.connect(DB_PATH)
+def adicionar_pendencia_db(cliente, tarefa, termo_lembrete, db_path):
+    conn = sqlite3.connect(db_path, timeout=30)
     cursor = conn.cursor()
 
     data_alerta = None
@@ -183,8 +202,8 @@ def adicionar_pendencia_db(cliente, tarefa, termo_lembrete=None):
     conn.close()
     return data_alerta
 
-def listar_pendencias_db(cliente):
-    conn = sqlite3.connect(DB_PATH)
+def listar_pendencias_db(cliente, db_path):
+    conn = sqlite3.connect(db_path, timeout=30)
     cursor = conn.cursor()
     cursor.execute(
         "SELECT id, tarefa FROM pendencias WHERE cliente = ? ORDER BY id ASC",
@@ -194,16 +213,16 @@ def listar_pendencias_db(cliente):
     conn.close()
     return [{"id_real": linha[0], "tarefa": linha[1]} for linha in linhas]
 
-def listar_absolutamente_tudo_db():
-    conn = sqlite3.connect(DB_PATH)
+def listar_absolutamente_tudo_db(db_path):
+    conn = sqlite3.connect(db_path, timeout=30)
     cursor = conn.cursor()
     cursor.execute("SELECT cliente, tarefa FROM pendencias ORDER BY cliente ASC, id ASC")
     linhas = cursor.fetchall()
     conn.close()
     return linhas
 
-def deletar_pendencia_db(cliente, indice_visual):
-    conn = sqlite3.connect(DB_PATH)
+def deletar_pendencia_db(cliente, indice_visual, db_path):
+    conn = sqlite3.connect(db_path, timeout=30)
     cursor = conn.cursor()
     cursor.execute(
         "SELECT id FROM pendencias WHERE cliente = ? ORDER BY id ASC",
@@ -240,7 +259,7 @@ def enviar_whatsapp(jid_destino, texto):
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=10)
         print(f"📡 [EVOLUTION RESPOSTA] Status: {response.status_code}")
-        print(f"📄 [EVOLUTION BODY]: {response.text}")
+
 
         sucesso = response.status_code in [200, 201]
 
@@ -257,8 +276,8 @@ def enviar_whatsapp(jid_destino, texto):
         print(f"❌ [ERRO CRÍTICO ENVIO]: {e}")
         return False
 
-def formatar_lista_resposta(cliente):
-    tarefas = listar_pendencias_db(cliente)
+def formatar_lista_resposta(cliente, db_path):
+    tarefas = listar_pendencias_db(cliente, db_path)
     cliente_maiusculo = cliente.upper()
 
     if not tarefas:
@@ -271,8 +290,8 @@ def formatar_lista_resposta(cliente):
     resposta += f"\n💡 _Para remover use: {PREFIXO_COMANDO}del {cliente} <número>_"
     return resposta
 
-def formatar_geral_todos_clientes():
-    linhas = listar_absolutamente_tudo_db()
+def formatar_geral_todos_clientes(db_path):
+    linhas = listar_absolutamente_tudo_db(db_path)
 
     if not linhas:
         return "🎉 Sensacional! Não há *nenhuma* pendência registrada para nenhum cliente!"
@@ -299,26 +318,29 @@ def formatar_geral_todos_clientes():
 # MOTOR DE PROCESSAMENTO DE TEXTO (WHATSAPP)
 # -------------------------------------------------------------
 def processar_comando_whatsapp(mensagem_texto, jid_remetente):
+    db_path = GRUPOS.get(jid_remetente)
+    if db_path is None:
+        return
     texto = mensagem_texto.strip()
     texto_minusculo = texto.lower().replace('?', '').strip()
 
     if texto_minusculo in ['pendencias', 'pendencia', 'lista', 'listar', 'todos', 'tudo']:
-        resposta = formatar_geral_todos_clientes()
+        resposta = formatar_geral_todos_clientes(db_path)
         enviar_whatsapp(jid_remetente, resposta)
         return
 
     if texto.lower().startswith(('del ', 'check ')):
-        padrao_del = r"^(del|check)\s+(\w+)\s+(\d+)$"
+        padrao_del = r"^(del|check)\s+(.+?)\s+(\d+)$"
         match = re.match(padrao_del, texto, re.IGNORECASE)
 
         if match:
             _, cliente, indice_visual = match.groups()
             indice_visual = int(indice_visual)
 
-            sucesso = deletar_pendencia_db(cliente, indice_visual)
+            sucesso = deletar_pendencia_db(cliente, indice_visual, db_path)
             if sucesso:
                 resposta = f"✅ Item {indice_visual} removido com sucesso!\n\n"
-                resposta += formatar_lista_resposta(cliente)
+                resposta += formatar_lista_resposta(cliente, db_path)
             else:
                 resposta = f"❌ Não achei o item {indice_visual} na lista de *{cliente.upper()}*."
 
@@ -338,7 +360,7 @@ def processar_comando_whatsapp(mensagem_texto, jid_remetente):
             conteudo = conteudo[:match_lembrete.start()].strip()
 
         if cliente and conteudo:
-            data_alerta = adicionar_pendencia_db(cliente, conteudo, termo_lembrete)
+            data_alerta = adicionar_pendencia_db(cliente, conteudo, termo_lembrete, db_path)
 
             resposta = f"💾 Salvo para *{cliente.upper()}*!\n"
             if data_alerta:
@@ -348,26 +370,29 @@ def processar_comando_whatsapp(mensagem_texto, jid_remetente):
             else:
                 resposta += "\n"
 
-            resposta += formatar_lista_resposta(cliente)
+            resposta += formatar_lista_resposta(cliente, db_path)
             enviar_whatsapp(jid_remetente, resposta)
             return
 
+    consulta_explicita = False
     for prefixo in ['pendencias ', 'pendencia ', 'lista ', 'listar ']:
         if texto_minusculo.startswith(prefixo):
-            texto_minusculo = texto_minusculo.replace(prefixo, '').strip()
+            texto_minusculo = texto_minusculo[len(prefixo):].strip()
+            consulta_explicita = True
+            break
 
-    if len(texto_minusculo.split()) == 1 and len(texto_minusculo) > 1:
-        resposta = formatar_lista_resposta(texto_minusculo)
+    if texto_minusculo and (consulta_explicita or len(texto_minusculo.split()) == 1):
+        resposta = formatar_lista_resposta(texto_minusculo, db_path)
         enviar_whatsapp(jid_remetente, resposta)
         return
 
 # -------------------------------------------------------------
 # ROTINA DE VERIFICAÇÃO CONTINUA DE LEMBRETES
 # -------------------------------------------------------------
-def verificar_e_disparar_lembretes():
+def verificar_e_disparar_lembretes_grupo(jid_destino, db_path):
     agora_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(db_path, timeout=30)
     cursor = conn.cursor()
     cursor.execute(
         "SELECT id, cliente, tarefa, data_alerta FROM pendencias WHERE data_alerta <= ? AND lembrete_enviado = 0",
@@ -395,7 +420,9 @@ def verificar_e_disparar_lembretes():
             mensagem += f"• {t}\n"
         mensagem += "\n"
 
-    enviar_whatsapp(JID_WHATSAPP, mensagem)
+    if not enviar_whatsapp(jid_destino, mensagem):
+        conn.close()
+        return
 
     for id_tarefa in ids_enviados:
         cursor.execute("UPDATE pendencias SET lembrete_enviado = 1 WHERE id = ?", (id_tarefa,))
@@ -403,10 +430,18 @@ def verificar_e_disparar_lembretes():
     conn.commit()
     conn.close()
 
+def verificar_e_disparar_lembretes():
+    for jid, db_path in GRUPOS.items():
+        try:
+            verificar_e_disparar_lembretes_grupo(jid, db_path)
+        except Exception as erro:
+            print(f"Erro nos lembretes do grupo {jid}: {erro}")
+
+
 async def loop_verificacao_horario():
     while True:
         try:
-            verificar_e_disparar_lembretes()
+            await asyncio.to_thread(verificar_e_disparar_lembretes)
         except Exception as e:
             print(f"❌ [ERRO VERIFICAÇÃO LEMBRETES]: {e}")
         await asyncio.sleep(30)
@@ -424,15 +459,22 @@ async def receber_webhook(request: Request, background_tasks: BackgroundTasks):
         print(f"❌ [ERRO JSON]: {e}")
         return {"status": "json_invalido"}
 
+    if not isinstance(dados, dict):
+        return {"status": "json_invalido"}
+
     if dados.get("event") == "messages.upsert":
         data = dados.get("data", {})
+        if not isinstance(data, dict):
+            return {"status": "dados_invalidos"}
         key = data.get("key", {})
+        if not isinstance(key, dict):
+            return {"status": "dados_invalidos"}
 
         # Primeiro filtro: só continua se a mensagem for do grupo configurado.
         # Qualquer coisa fora desse grupo é descartada aqui, sem olhar fromMe,
         # texto ou qualquer outra coisa.
-        jid_remetente = key.get("remoteJid", "").strip()
-        if jid_remetente != JID_WHATSAPP.strip():
+        jid_remetente = str(key.get("remoteJid") or "").strip()
+        if jid_remetente not in GRUPOS:
             return {"status": "ignorado_outro_chat"}
 
         msg_id = key.get("id")
@@ -447,7 +489,7 @@ async def receber_webhook(request: Request, background_tasks: BackgroundTasks):
             else:
                 print("✅ Mensagem sua (mesmo número, digitada manualmente) - processando como comando.")
 
-        print(f"📍 [GRUPO CONFERIDO] Mensagem é do grupo esperado: '{JID_WHATSAPP}'")
+        print(f"📍 [GRUPO CONFERIDO] Mensagem é do grupo esperado: '{jid_remetente}'")
 
         message = data.get("message", {})
         texto_mensagem = ""
@@ -461,6 +503,8 @@ async def receber_webhook(request: Request, background_tasks: BackgroundTasks):
         elif "videoMessage" in message and message["videoMessage"]:
             texto_mensagem = message["videoMessage"].get("caption", "")
 
+        if not isinstance(texto_mensagem, str):
+            return {"status": "sem_texto"}
         texto_mensagem = texto_mensagem.strip()
 
         if not texto_mensagem:

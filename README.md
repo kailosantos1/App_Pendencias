@@ -1,82 +1,37 @@
-\# 🤖 Bot Gerenciador de Pendências (WhatsApp + Evolution API)
+# Pendências e Contratos SystemUp
 
+Um processo, porta 5000 e webhook /webhook. Cada JID usa seu próprio SQLite.
 
+## Instalar no Windows
 
-Sistema em Python utilizando \*\*FastAPI\*\* e \*\*SQLite\*\* para gerenciamento de tarefas e lembretes automáticos diretamente via grupos do WhatsApp, integrado à \*\*Evolution API\*\*.
+1. Pare o processo antigo e faça uma cópia de segurança da pasta e do pendencias.db.
+2. Extraia este projeto na pasta do sistema original, junto do pendencias.db existente. O banco antigo mantém sua tabela e seus registros; contratos.db será criado separadamente. Nenhum banco de produção foi incluído nesta entrega.
+3. Copie .env.example para .env e preencha EVOLUTION_API_KEY com a chave já utilizada. Use os campos novos do exemplo. Se precisar de caminhos diferentes, configure DB_PENDENCIAS e DB_CONTRATOS. Caminhos relativos usam sempre a pasta de sistema.py.
+4. No CMD nessa pasta, execute `python -m pip install -r requirements.txt`.
+5. Execute `python sistema.py` ou iniciar.bat. Execute somente uma cópia do sistema, sem múltiplos workers, para não duplicar a rotina de lembretes.
+6. Mantenha na Evolution o webhook já funcional: http://localhost:5000/webhook. A instância permanece App_Pendencias. Não é necessário distribuidor ou uma segunda porta.
 
+## Comandos em ambos os grupos
 
+- `!studio home: revisar contrato`
+- `!studio home: ligar para cliente lembrete amanhã às 14:30`
+- `!lista` — lista geral somente do grupo atual.
+- `!lista studio home` — lista do cliente no grupo atual.
+- `!del studio home 1` — exclui o primeiro item do cliente no grupo atual.
+- `!check studio home 1` — mesmo comportamento de del.
+- `!cliente` — consulta rápida de um cliente com nome de uma palavra.
 
-\---
+Os aliases pendencias, pendencia, listar, todos e tudo continuam disponíveis com `!`. Mensagens começando com `/` e conversas comuns são ignoradas. Comandos manuais do próprio número conectado continuam aceitos. Respostas do bot mantêm a identificação por ID e não iniciam com o prefixo de comando.
 
+Pendências Systemup: 120363428433320020@g.us → pendencias.db.
+Contratos SystemUp: 120363413254902958@g.us → contratos.db.
 
+Os lembretes só são marcados como enviados quando a Evolution retorna 200/201; se o envio falhar, são tentados novamente na próxima verificação. Isso confirma aceitação pela API, não leitura pelo destinatário. A interpretação de datas mantém as regras do original e usa o horário local do servidor.
 
-\## 🚀 Funcionalidades
+O trecho DELETE enviado no chat não faz parte da inicialização e não foi executado. Para remover studio home em um grupo, use !del studio home N para cada item. Uma limpeza por SQL deve selecionar explicitamente o banco correto.
 
+## Verificação
 
+`python -m unittest -v test_sistema.py`
 
-\- 📝 \*\*Adição de Pendências:\*\* Registre tarefas atribuídas a clientes diretamente pelo chat.
-
-\- ⏰ \*\*Lembretes Automáticos:\*\* Reconhece horários e datas no texto (ex: `hoje`, `amanhã`, `dia 20`, `as 14:00`) e dispara alertas no horário agendado.
-
-\- 📊 \*\*Consultas:\*\* Visualize pendências específicas por cliente ou a relação geral de todas as tarefas.
-
-\- ✅ \*\*Remoção de Tarefas:\*\* Conclua ou remova itens facilmente por comandos numéricos.
-
-\- 🛡️ \*\*Filtro de Segurança:\*\* Responde apenas no grupo de WhatsApp autorizado.
-
-
-
-\---
-
-
-
-\## 🛠️ Tecnologias Utilizadas
-
-
-
-\- \*\*Python 3.10+\*\*
-
-\- \*\*FastAPI\*\* (Backend e Webhook)
-
-\- \*\*Uvicorn\*\* (Servidor ASGI)
-
-\- \*\*SQLite3\*\* (Banco de dados relacional leve)
-
-\- \*\*Evolution API\*\* (Integração com WhatsApp)
-
-
-
-\---
-
-
-
-\## 📦 Como Configurar e Rodar o Projeto
-
-
-
-\### 1. Pré-requisitos
-
-
-
-\- Python instalado na sua máquina.
-
-\- Uma instância funcional da \[Evolution API](https://github.com/EvolutionAPI/evolution-api).
-
-
-
-\### 2. Instalação
-
-
-
-Clone o repositório e instale as dependências:
-
-
-
-```bash
-
-git clone \[https://github.com/seu-usuario/seu-repositorio.git](https://github.com/seu-usuario/seu-repositorio.git)
-
-cd seu-repositorio
-
-pip install -r requirements.txt
-
+Os testes usam bancos temporários e envio simulado, sem conectar ao WhatsApp. Após instalar, teste !lista e uma tarefa de teste em cada grupo para confirmar o ambiente real.
