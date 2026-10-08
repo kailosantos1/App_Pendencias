@@ -24,11 +24,11 @@ def caminho_banco(nome):
     return str((BASE_DIR / nome).resolve())
 
 GRUPOS = {
-    os.getenv("JID_PENDENCIAS", os.getenv("JID_WHATSAPP", "120363428433320020@g.us")).strip(): caminho_banco(os.getenv("DB_PENDENCIAS", os.getenv("DB_PATH", "pendencias.db"))),
-    os.getenv("JID_CONTRATOS", "120363413254902958@g.us").strip(): caminho_banco(os.getenv("DB_CONTRATOS", "contratos.db")),
+    os.getenv("JID_PENDENCIAS", "").strip(): caminho_banco(os.getenv("DB_PENDENCIAS", os.getenv("DB_PATH", "pendencias.db"))),
+    os.getenv("JID_CONTRATOS", "").strip(): caminho_banco(os.getenv("DB_CONTRATOS", "contratos.db")),
 }
 if len(GRUPOS) != 2 or any(not jid.endswith("@g.us") for jid in GRUPOS):
-    raise ValueError("Configure dois JIDs de grupos distintos.")
+    raise ValueError("Configure JID_PENDENCIAS e JID_CONTRATOS no .env com dois JIDs de grupos distintos.")
 if len(set(os.path.normcase(p) for p in GRUPOS.values())) != 2:
     raise ValueError("Cada grupo precisa de um banco distinto.")
 
@@ -244,6 +244,9 @@ def deletar_pendencia_db(cliente, indice_visual, db_path):
 # FUNÇÕES DE ENVIO E FORMATAÇÃO
 # -------------------------------------------------------------
 def enviar_whatsapp(jid_destino, texto):
+    if jid_destino not in GRUPOS:
+        print("Envio bloqueado: destino não está nos grupos configurados.")
+        return False
     url = f"{EVOLUTION_URL}/message/sendText/{EVOLUTION_INSTANCE}"
 
     payload = {
